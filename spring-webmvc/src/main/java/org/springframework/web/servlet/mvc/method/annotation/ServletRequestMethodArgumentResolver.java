@@ -1,11 +1,11 @@
 /*
- * Copyright 2002-2017 the original author or authors.
+ * Copyright 2002-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -19,19 +19,20 @@ package org.springframework.web.servlet.mvc.method.annotation;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.Reader;
-import java.lang.reflect.Method;
 import java.security.Principal;
 import java.time.ZoneId;
 import java.util.Locale;
 import java.util.TimeZone;
+
 import javax.servlet.ServletRequest;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpSession;
+import javax.servlet.http.PushBuilder;
 
 import org.springframework.core.MethodParameter;
 import org.springframework.http.HttpMethod;
+import org.springframework.lang.Nullable;
 import org.springframework.util.ClassUtils;
-import org.springframework.util.ReflectionUtils;
 import org.springframework.web.bind.support.WebDataBinderFactory;
 import org.springframework.web.context.request.NativeWebRequest;
 import org.springframework.web.context.request.WebRequest;
@@ -41,14 +42,17 @@ import org.springframework.web.multipart.MultipartRequest;
 import org.springframework.web.servlet.support.RequestContextUtils;
 
 /**
- * Resolves request-related method argument values of the following types:
+ * Resolves servlet backed request-related method arguments. Supports values of the
+ * following types:
  * <ul>
  * <li>{@link WebRequest}
  * <li>{@link ServletRequest}
  * <li>{@link MultipartRequest}
  * <li>{@link HttpSession}
  * <li>{@link PushBuilder} (as of Spring 5.0 on Servlet 4.0)
- * <li>{@link Principal}
+ * <li>{@link Principal} but only if not annotated in order to allow custom
+ * resolvers to resolve it, and the falling back on
+ * {@link PrincipalMethodArgumentResolver}.
  * <li>{@link InputStream}
  * <li>{@link Reader}
  * <li>{@link HttpMethod} (as of Spring 4.0)
@@ -64,8 +68,19 @@ import org.springframework.web.servlet.support.RequestContextUtils;
  */
 public class ServletRequestMethodArgumentResolver implements HandlerMethodArgumentResolver {
 
-	private static final Method getPushBuilderMethod =
-			ClassUtils.getMethodIfAvailable(HttpServletRequest.class, "getPushBuilder");
+	@Nullable
+	private static Class<?> pushBuilder;
+
+	static {
+		try {
+			pushBuilder = ClassUtils.forName("javax.servlet.http.PushBuilder",
+					ServletRequestMethodArgumentResolver.class.getClassLoader());
+		}
+		catch (ClassNotFoundException ex) {
+			// Servlet 4.0 PushBuilder not found - not supported for injection
+			pushBuilder = null;
+		}
+	}
 
 
 	@Override
@@ -75,8 +90,8 @@ public class ServletRequestMethodArgumentResolver implements HandlerMethodArgume
 				ServletRequest.class.isAssignableFrom(paramType) ||
 				MultipartRequest.class.isAssignableFrom(paramType) ||
 				HttpSession.class.isAssignableFrom(paramType) ||
-				(getPushBuilderMethod != null && getPushBuilderMethod.getReturnType().isAssignableFrom(paramType)) ||
-				Principal.class.isAssignableFrom(paramType) ||
+				(pushBuilder != null && pushBuilder.isAssignableFrom(paramType)) ||
+				(Principal.class.isAssignableFrom(paramType) && !parameter.hasParameterAnnotations()) ||
 				InputStream.class.isAssignableFrom(paramType) ||
 				Reader.class.isAssignableFrom(paramType) ||
 				HttpMethod.class == paramType ||
@@ -86,8 +101,8 @@ public class ServletRequestMethodArgumentResolver implements HandlerMethodArgume
 	}
 
 	@Override
-	public Object resolveArgument(MethodParameter parameter, ModelAndViewContainer mavContainer,
-			NativeWebRequest webRequest, WebDataBinderFactory binderFactory) throws Exception {
+	public Object resolveArgument(MethodParameter parameter, @Nullable ModelAndViewContainer mavContainer,
+			NativeWebRequest webRequest, @Nullable WebDataBinderFactory binderFactory) throws Exception {
 
 		Class<?> paramType = parameter.getParameterType();
 
@@ -118,6 +133,7 @@ public class ServletRequestMethodArgumentResolver implements HandlerMethodArgume
 		return nativeRequest;
 	}
 
+	@Nullable
 	private Object resolveArgument(Class<?> paramType, HttpServletRequest request) throws IOException {
 		if (HttpSession.class.isAssignableFrom(paramType)) {
 			HttpSession session = request.getSession();
@@ -127,13 +143,8 @@ public class ServletRequestMethodArgumentResolver implements HandlerMethodArgume
 			}
 			return session;
 		}
-		else if (getPushBuilderMethod != null && getPushBuilderMethod.getReturnType().isAssignableFrom(paramType)) {
-			Object pushBuilder = ReflectionUtils.invokeMethod(getPushBuilderMethod, request);
-			if (pushBuilder != null && !paramType.isInstance(pushBuilder)) {
-				throw new IllegalStateException(
-						"Current push builder is not of type [" + paramType.getName() + "]: " + pushBuilder);
-			}
-			return pushBuilder;
+		else if (pushBuilder != null && pushBuilder.isAssignableFrom(paramType)) {
+			return PushBuilderDelegate.resolvePushBuilder(request, paramType);
 		}
 		else if (InputStream.class.isAssignableFrom(paramType)) {
 			InputStream inputStream = request.getInputStream();
@@ -176,6 +187,24 @@ public class ServletRequestMethodArgumentResolver implements HandlerMethodArgume
 
 		// Should never happen...
 		throw new UnsupportedOperationException("Unknown parameter type: " + paramType.getName());
+	}
+
+
+	/**
+	 * Inner class to avoid a hard dependency on Servlet API 4.0 at runtime.
+	 */
+	private static class PushBuilderDelegate {
+
+		@Nullable
+		public static Object resolvePushBuilder(HttpServletRequest request, Class<?> paramType) {
+			PushBuilder pushBuilder = request.newPushBuilder();
+			if (pushBuilder != null && !paramType.isInstance(pushBuilder)) {
+				throw new IllegalStateException(
+						"Current push builder is not of type [" + paramType.getName() + "]: " + pushBuilder);
+			}
+			return pushBuilder;
+
+		}
 	}
 
 }

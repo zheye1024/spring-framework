@@ -1,11 +1,11 @@
 /*
- * Copyright 2002-2017 the original author or authors.
+ * Copyright 2002-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -27,6 +27,8 @@ import java.util.Locale;
 import java.util.Optional;
 
 import org.springframework.core.io.Resource;
+import org.springframework.lang.Nullable;
+import org.springframework.util.Assert;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 import org.springframework.util.StringUtils;
@@ -39,15 +41,16 @@ import org.springframework.util.StringUtils;
  * @author Arjen Poutsma
  * @since 5.0
  */
-public class MediaTypeFactory {
+public final class MediaTypeFactory {
 
 	private static final String MIME_TYPES_FILE_NAME = "/org/springframework/http/mime.types";
 
-	private static final MultiValueMap<String, MediaType> fileExtensionToMediaTypes;
+	private static final MultiValueMap<String, MediaType> fileExtensionToMediaTypes = parseMimeTypes();
 
-	static {
-		fileExtensionToMediaTypes = parseMimeTypes();
+
+	private MediaTypeFactory() {
 	}
+
 
 	/**
 	 * Parse the {@code mime.types} file found in the resources. Format is:
@@ -62,12 +65,9 @@ public class MediaTypeFactory {
 	 * @return a multi-value map, mapping media types to file extensions.
 	 */
 	private static MultiValueMap<String, MediaType> parseMimeTypes() {
-		InputStream is = null;
-		try {
-			is = MediaTypeFactory.class.getResourceAsStream(MIME_TYPES_FILE_NAME);
-			BufferedReader reader =
-					new BufferedReader(new InputStreamReader(is, StandardCharsets.US_ASCII));
-
+		InputStream is = MediaTypeFactory.class.getResourceAsStream(MIME_TYPES_FILE_NAME);
+		Assert.state(is != null, MIME_TYPES_FILE_NAME + " not found in classpath");
+		try (BufferedReader reader = new BufferedReader(new InputStreamReader(is, StandardCharsets.US_ASCII))) {
 			MultiValueMap<String, MediaType> result = new LinkedMultiValueMap<>();
 			String line;
 			while ((line = reader.readLine()) != null) {
@@ -76,7 +76,6 @@ public class MediaTypeFactory {
 				}
 				String[] tokens = StringUtils.tokenizeToStringArray(line, " \t\n\r\f");
 				MediaType mediaType = MediaType.parseMediaType(tokens[0]);
-
 				for (int i = 1; i < tokens.length; i++) {
 					String fileExtension = tokens[i].toLowerCase(Locale.ENGLISH);
 					result.add(fileExtension, mediaType);
@@ -85,16 +84,7 @@ public class MediaTypeFactory {
 			return result;
 		}
 		catch (IOException ex) {
-			throw new IllegalStateException("Could not load '" + MIME_TYPES_FILE_NAME + "'", ex);
-		}
-		finally {
-			if (is != null) {
-				try {
-					is.close();
-				}
-				catch (IOException ignore) {
-				}
-			}
+			throw new IllegalStateException("Could not read " + MIME_TYPES_FILE_NAME, ex);
 		}
 	}
 
@@ -103,7 +93,7 @@ public class MediaTypeFactory {
 	 * @param resource the resource to introspect
 	 * @return the corresponding media type, or {@code null} if none found
 	 */
-	public static Optional<MediaType> getMediaType(Resource resource) {
+	public static Optional<MediaType> getMediaType(@Nullable Resource resource) {
 		return Optional.ofNullable(resource)
 				.map(Resource::getFilename)
 				.flatMap(MediaTypeFactory::getMediaType);
@@ -114,7 +104,7 @@ public class MediaTypeFactory {
 	 * @param filename the file name plus extension
 	 * @return the corresponding media type, or {@code null} if none found
 	 */
-	public static Optional<MediaType> getMediaType(String filename) {
+	public static Optional<MediaType> getMediaType(@Nullable String filename) {
 		return getMediaTypes(filename).stream().findFirst();
 	}
 
@@ -123,11 +113,13 @@ public class MediaTypeFactory {
 	 * @param filename the file name plus extension
 	 * @return the corresponding media types, or an empty list if none found
 	 */
-	public static List<MediaType> getMediaTypes(String filename) {
-		return Optional.ofNullable(StringUtils.getFilenameExtension(filename))
-				.map(s -> s.toLowerCase(Locale.ENGLISH))
-				.map(fileExtensionToMediaTypes::get)
-				.orElse(Collections.emptyList());
+	public static List<MediaType> getMediaTypes(@Nullable String filename) {
+		List<MediaType> mediaTypes = null;
+		String ext = StringUtils.getFilenameExtension(filename);
+		if (ext != null) {
+			mediaTypes = fileExtensionToMediaTypes.get(ext.toLowerCase(Locale.ENGLISH));
+		}
+		return (mediaTypes != null ? mediaTypes : Collections.emptyList());
 	}
 
 }
